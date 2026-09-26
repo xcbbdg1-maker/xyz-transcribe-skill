@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.log
+*.onnx
+transcript.md
+output.md
