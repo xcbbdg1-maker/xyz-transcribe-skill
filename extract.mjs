@@ -9,8 +9,13 @@
  *   1. fetch 单集页面 HTML → 提取 __NEXT_DATA__ 拿标题 + 音频地址
  *   2. 下载音频到临时文件
  *   3. 调用 video-transcribe-skill 的 transcribe.py 转写
- *   4. 拼接元信息头（标题/来源/嘉宾/时长/转写方式/免责声明）
- *   5. 输出最终 md 到指定路径
+ *   4. 拼接元信息头 + 每段之间空行
+ *   5. （可选 --diarize）调用 diarize.py 做说话人分离
+ *   6. 输出最终 md 到指定路径
+ *
+ * 可选参数：
+ *   --diarize          启用说话人分离（需 sherpa-onnx + 模型，见 diarize.py）
+ *   --threshold=0.25   说话人聚类阈值（越小越宽容合并，默认 0.25）
  *
  * 依赖：Node >= 21、Python + faster-whisper（见 video-transcribe-skill）
  *       需设置 TRANSCRIBE_SCRIPT 环境变量指向 transcribe.py，或放同目录。
@@ -29,6 +34,8 @@ const url = process.argv[2];
 const outPath = process.argv[3] || 'transcript.md';
 const modelArg = process.argv.find(a => a.startsWith('--model='))?.split('=')[1] || 'medium';
 const promptArg = process.argv.find(a => a.startsWith('--prompt='))?.split('=')[1] || '';
+const doDiarize = process.argv.includes('--diarize');
+const thresholdArg = process.argv.find(a => a.startsWith('--threshold='))?.split('=')[1] || '0.25';
 
 if (!url || !url.includes('xiaoyuzhoufm.com/episode/')) {
   console.error('用法: node extract.mjs <小宇宙单集URL> [输出md路径] [--model medium] [--prompt "领域术语"]');
@@ -142,10 +149,41 @@ if (!existsSync(transcriptFile)) {
 // 读取转写结果，去掉原始头部，加新头部
 const rawTranscript = readFileSync(transcriptFile, 'utf8');
 // 去掉原始头部（# 标题行 + ⚠️ 提示行），保留正文 + DONE 标记
+// 每段之间加空行，提升可读性
 const bodyStart = rawTranscript.indexOf('[00:');
-const body = bodyStart >= 0 ? rawTranscript.slice(bodyStart) : rawTranscript;
+let body = bodyStart >= 0 ? rawTranscript.slice(bodyStart) : rawTranscript;
+body = body.replace(/^(\[\d{2}:\d{2}\] .*)$/gm, '$1\n');
 
 const durationStr = `${Math.floor(durationSec/3600)}小时${Math.floor((durationSec%3600)/60)}分钟${durationSec%60}秒`;
+
+// ---------- 4b. 可选：说话人分离 ----------
+let diarizeNote = '';
+if (doDiarize) {
+  const diarizeScript = join(__dirname, 'diarize.py');
+  if (!existsSync(diarizeScript)) {
+    process.stderr.write('未找到 diarize.py，跳过说话人分离\n');
+  } else {
+    process.stderr.write('说话人分离中…\n');
+    const diarOut = join(tmpdir(), `xyz_diarized_${Date.now()}.md`);
+    try {
+      execFileSync('python', [
+        diarizeScript, audioTmp, transcriptFile, diarOut,
+        thresholdArg,
+      ], { stdio: 'pipe', timeout: 600000 });
+      // 用分离结果替换正文
+      const diarMd = readFileSync(diarOut, 'utf8');
+      const diarBodyStart = diarMd.indexOf('[00:');
+      if (diarBodyStart >= 0) {
+        body = diarMd.slice(diarBodyStart);
+      }
+      diarizeNote = '- 说话人分离：sherpa-onnx 嵌入聚类';
+      process.stderr.write('说话人分离完成\n');
+      rmSync(diarOut, { force: true });
+    } catch (e) {
+      process.stderr.write(`说话人分离失败: ${e.message}，使用无标注结果\n`);
+    }
+  }
+}
 
 const md = `# ${title}
 
@@ -153,7 +191,7 @@ const md = `# ${title}
 - 播客：${podcastTitle}
 - 时长：${durationStr}
 - 转写方式：faster-whisper ${modelArg} 模型本地转写（CPU int8）
-- 说明：以下内容为 AI 语音转写，保留时间戳，未对识别错误进行人工改写，含同音错字，引用前须人工校对。
+${diarizeNote ? diarizeNote + '\n' : ''}- 说明：以下内容为 AI 语音转写，保留时间戳，未对识别错误进行人工改写，含同音错字，引用前须人工校对。
 
 ---
 

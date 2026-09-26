@@ -14,14 +14,30 @@
   → 提取 __NEXT_DATA__ 拿标题 + 音频地址
   → 下载音频 .m4a（缓存复用）
   → faster-whisper 本地转写（CPU int8）
-  → 拼接元信息头 + 时间戳正文 → Markdown
+  →（可选）sherpa-onnx 说话人分离
+  → 拼接元信息头 + 时间戳正文（每段空行）→ Markdown
 ```
+
+### 说话人分离（--diarize）
+
+用 sherpa-onnx 嵌入聚类，而非 pyannote 全量分割（后者在 CPU 上 17 分钟音频超过 10 分钟跑不完）：
+
+1. 复用 whisper 分段，每段取 3 秒音频
+2. `SpeakerEmbeddingExtractor`（3DSpeaker ERES2Net 模型）提取嵌入
+3. `SpeakerEmbeddingManager` 在线聚类（threshold 默认 0.25）
+4. 输出 `[MM:SS] 说话人A: 文字`，每段之间空行
+
+约 2 分钟跑完（vs pyannote 超 10 分钟未完成）。
 
 ## 前置条件
 
 - Node.js ≥ 21
 - Python 3 + faster-whisper + av（`pip install faster-whisper av`）
 - [video-transcribe-skill](https://github.com/xcbbdg1-maker/video-transcribe-skill) 的 `transcribe.py`（同级目录 / `~/video-transcribe-skill/` / `TRANSCRIBE_SCRIPT` 环境变量）
+
+说话人分离额外需要：
+- `pip install sherpa-onnx numpy`
+- 嵌入模型 `~/speaker_embed.onnx`（40MB，下载 URL 见 SKILL.md）
 
 ## 用法
 
@@ -31,6 +47,9 @@ set HF_ENDPOINT=https://hf-mirror.com
 
 :: 2. 一条命令搞定
 node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --model medium --prompt "税务,CPA,四大"
+
+:: 3. 带说话人分离
+node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --diarize --threshold=0.25
 ```
 
 参数：
@@ -38,6 +57,8 @@ node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --model
 - 第2参数：输出 md 路径（默认 transcript.md）
 - `--model=`：whisper 模型（base/small/medium/large-v3，默认 medium）
 - `--prompt=`：领域术语提示，减少同音错字
+- `--diarize`：启用说话人分离
+- `--threshold=`：聚类阈值（默认 0.25，越小越宽容合并）
 
 ## 输出格式
 
@@ -48,6 +69,7 @@ node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --model
 - 播客：播客名
 - 时长：X小时Y分钟Z秒
 - 转写方式：faster-whisper medium 模型本地转写（CPU int8）
+- 说话人分离：sherpa-onnx 嵌入聚类（仅 --diarize 时）
 - 说明：以下内容为 AI 语音转写，保留时间戳，未对识别错误进行人工改写，含同音错字，引用前须人工校对。
 
 ---
@@ -55,6 +77,13 @@ node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --model
 [00:00] 第一段文字
 
 [00:04] 第二段文字
+```
+
+带说话人分离时：
+```markdown
+[00:00] 说话人C: 第一段文字
+
+[00:04] 说话人B: 第二段文字
 ```
 
 ## token 节约设计
@@ -71,6 +100,7 @@ node extract.mjs "https://www.xiaoyuzhoufm.com/episode/xxxx" "output.md" --model
 | 文件 | 说明 |
 |---|---|
 | `extract.mjs` | 端到端提取脚本，Node ESM 零外部依赖 |
+| `diarize.py` | 说话人分离脚本（sherpa-onnx 嵌入聚类） |
 | `SKILL.md` | ThinCoder skill 指令文件 |
 
 ## 依赖关系
