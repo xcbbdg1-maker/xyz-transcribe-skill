@@ -21,8 +21,8 @@
  *       需设置 TRANSCRIBE_SCRIPT 环境变量指向 transcribe.py，或放同目录。
  */
 
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -96,8 +96,7 @@ if (!existsSync(audioTmp)) {
     console.error('下载音频失败:', e.message);
     process.exit(1);
   }
-  const size = execFileSync('curl', ['-sI', audioUrl], { encoding: 'utf8' }).match(/content-length:\s*(\d+)/i);
-  process.stderr.write(`音频大小: ${(require('node:fs').statSync(audioTmp).size / 1024 / 1024).toFixed(1)}MB\n`);
+  process.stderr.write(`音频大小: ${(statSync(audioTmp).size / 1024 / 1024).toFixed(1)}MB\n`);
 } else {
   process.stderr.write('音频已存在，跳过下载\n');
 }
@@ -109,7 +108,7 @@ if (!scriptPath || !existsSync(scriptPath)) {
   const candidates = [
     join(__dirname, 'transcribe.py'),
     join(__dirname, '..', 'video-transcribe-skill', 'scripts', 'transcribe.py'),
-    join(require('node:os').homedir(), 'video-transcribe-skill', 'scripts', 'transcribe.py'),
+    join(homedir(), 'video-transcribe-skill', 'scripts', 'transcribe.py'),
   ];
   scriptPath = candidates.find(existsSync) || '';
 }
@@ -124,6 +123,11 @@ process.stderr.write('开始转写（这可能需要几分钟）…\n');
 const transcribeOut = join(tmpdir(), `xyz_transcript_${eid}`);
 mkdirSync(transcribeOut, { recursive: true });
 
+// 超时按音频时长动态计算：medium 模型 CPU 约 0.6x 实时，给 1.5 倍冗余，下限 10 分钟
+// （small 约 0.2x，large-v3 约 1.5x；统一用 1.5x 实时上限兜底）
+const transcribeTimeoutMs = Math.max(10 * 60 * 1000, durationSec * 1000 * 1.5);
+process.stderr.write(`转写超时上限: ${Math.round(transcribeTimeoutMs / 60000)} 分钟\n`);
+
 try {
   execFileSync('python', [
     scriptPath, audioTmp,
@@ -131,7 +135,7 @@ try {
     '--out', transcribeOut,
     '--lang', 'zh',
     ...(promptArg ? ['--prompt', promptArg] : []),
-  ], { stdio: 'pipe', timeout: 600000 });
+  ], { stdio: 'pipe', timeout: transcribeTimeoutMs });
 } catch (e) {
   console.error('转写失败:', e.message);
   process.exit(1);
@@ -169,7 +173,7 @@ if (doDiarize) {
       execFileSync('python', [
         diarizeScript, audioTmp, transcriptFile, diarOut,
         thresholdArg,
-      ], { stdio: 'pipe', timeout: 600000 });
+      ], { stdio: 'pipe', timeout: Math.max(10 * 60 * 1000, durationSec * 1000 * 0.5) });
       // 用分离结果替换正文
       const diarMd = readFileSync(diarOut, 'utf8');
       const diarBodyStart = diarMd.indexOf('[00:');
