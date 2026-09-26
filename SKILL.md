@@ -11,7 +11,7 @@
 1. `curl` 下载单集页面 HTML 到临时文件（不进上下文）
 2. 从 `__NEXT_DATA__` JSON 提取标题、播客名、时长、音频 URL
 3. 下载音频（.m4a）到临时目录，同 URL 复用缓存
-4. 调用 `video-transcribe-skill` 的 `transcribe.py`（faster-whisper CPU int8）转写
+4. 调用 `video-transcribe-skill` 的 `transcribe.py`（faster-whisper CPU int8 + 批处理管线）转写
 5. （可选）调用 `diarize.py` 做说话人分离
 6. 拼接元信息头（标题/来源/播客/时长/转写方式/免责声明）输出 md，每段之间空行
 7. 全程只输出进度到 stderr，转写文本直接落盘不进 LLM 上下文
@@ -37,6 +37,14 @@
 - 0.35 → 6 个
 - 0.25 → 4 个（推荐起点；多出的少数段噪音说话人，把它的段合并到相邻说话人）
 - 0.15 → 可能过度合并
+
+### 性能实测（16 核 CPU，medium/int8）
+
+- 30 分钟音频端到端：下载 <1min + 转写 **7.8min** + 分离 ~2min ≈ **11 分钟**
+- 转写提速关键：`transcribe.py` 已内置 `BatchedInferencePipeline(batch_size=8, beam_size=1)`，比逐段 beam_size=5 快 **3.5x**（27min → 7.8min）
+- 代价：分句更合并（旧管线 940 段短句 → 新管线 68 段长句），内容完整无缺失
+- 超时按音频时长动态计算（extract.mjs：转写 1.5x 实时上限、分离 0.5x、下限 10 分钟）——**勿改回固定值**，否则长音频必撞 spawnSync ETIMEDOUT
+- 长音频转写用后台进程 + 日志轮询（`start /b` + `findstr /c:"完成"`），不要阻塞等待，也不把转写正文读进上下文
 
 ## 前置条件
 
@@ -145,7 +153,9 @@ const out = lines.map(line => {
 | 未找到 `__NEXT_DATA__` | 小宇宙页面结构改版 | 检查 HTML 里 JSON 数据位置 |
 | 未找到音频地址 | episode 数据缺失 | 确认 URL 是单集（/episode/）而非播客（/podcast/） |
 | 未找到 transcribe.py | 脚本路径未配置 | 设 `TRANSCRIBE_SCRIPT` 环境变量 |
-| 转写超时 | CPU 上 medium 模型 + 长音频 | 换 `--model=small`，或增大超时 |
+| 转写超时 | 机器负载高或模型更慢 | 现已批处理提速 3.5x；确认超时是按音频时长动态算的，不是写死值 |
+| `spawnSync ETIMEDOUT` | 超时写死未随音频时长缩放 | 用 `max(10min, 时长×1.5)` 动态超时 |
+| `require is not defined` | .mjs 里用了 require() | ESM 必须用 import（statSync/homedir 等） |
 | 模型下载失败 | HuggingFace 被墙 | 设 `HF_ENDPOINT=https://hf-mirror.com` |
 | 说话人分离超时 | 误用了 pyannote 全量分割 | 改用 `diarize.py` 的嵌入聚类方案 |
 | 说话人数过多 | threshold 太高 | 降到 0.25 或 0.2 |
