@@ -155,6 +155,7 @@ if (!existsSync(transcriptFile)) {
 // 读取转写结果，去掉原始头部，加新头部
 const rawTranscript = readFileSync(transcriptFile, 'utf8');
 // 去掉原始头部（# 标题行 + ⚠️ 提示行），保留正文 + DONE 标记
+// 无说话人时每段空行 + 行尾硬换行（Markdown 软换行在 GitHub 会被合并）
 const bodyStart = rawTranscript.indexOf('[00:');
 let body = bodyStart >= 0 ? rawTranscript.slice(bodyStart) : rawTranscript;
 
@@ -251,6 +252,7 @@ if (doSplit) {
 }
 
 // ---------- 4e. 排版：说话人分块（同一说话人连续行紧凑，换人时空行） ----------
+// 行尾加两个空格 = Markdown 硬换行（<br>），否则 GitHub 渲染时单换行会被合并成一段
 {
   const lines = body.split('\n');
   const out = [];
@@ -261,7 +263,7 @@ if (doSplit) {
       const spk = m[1];
       if (prevSpk !== null && spk !== prevSpk) out.push('');
       prevSpk = spk;
-      out.push(line);
+      out.push(line.replace(/\s+$/, '') + '  ');
     } else {
       out.push(line);
     }
