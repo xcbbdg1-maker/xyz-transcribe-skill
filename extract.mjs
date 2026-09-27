@@ -155,10 +155,8 @@ if (!existsSync(transcriptFile)) {
 // 读取转写结果，去掉原始头部，加新头部
 const rawTranscript = readFileSync(transcriptFile, 'utf8');
 // 去掉原始头部（# 标题行 + ⚠️ 提示行），保留正文 + DONE 标记
-// 每段之间加空行，提升可读性
 const bodyStart = rawTranscript.indexOf('[00:');
 let body = bodyStart >= 0 ? rawTranscript.slice(bodyStart) : rawTranscript;
-body = body.replace(/^(\[\d{2}:\d{2}\] .*)$/gm, '$1\n');
 
 const durationStr = `${Math.floor(durationSec/3600)}小时${Math.floor((durationSec%3600)/60)}分钟${durationSec%60}秒`;
 
@@ -250,6 +248,25 @@ if (doSplit) {
       rmSync(splitOut, { force: true });
     }
   }
+}
+
+// ---------- 4e. 排版：说话人分块（同一说话人连续行紧凑，换人时空行） ----------
+{
+  const lines = body.split('\n');
+  const out = [];
+  let prevSpk = null;
+  for (const line of lines) {
+    const m = line.match(/^\[\d{2}:\d{2}\]\s*说话人([A-Z]):/);
+    if (m) {
+      const spk = m[1];
+      if (prevSpk !== null && spk !== prevSpk) out.push('');
+      prevSpk = spk;
+      out.push(line);
+    } else {
+      out.push(line);
+    }
+  }
+  body = out.join('\n');
 }
 
 const md = `# ${title}
