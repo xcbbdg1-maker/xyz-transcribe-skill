@@ -36,6 +36,8 @@ const modelArg = process.argv.find(a => a.startsWith('--model='))?.split('=')[1]
 const promptArg = process.argv.find(a => a.startsWith('--prompt='))?.split('=')[1] || '';
 const doDiarize = process.argv.includes('--diarize');
 const thresholdArg = process.argv.find(a => a.startsWith('--threshold='))?.split('=')[1] || '0.25';
+const termsArg = process.argv.find(a => a.startsWith('--terms='))?.split('=')[1] || '';
+const splitMaxLen = process.argv.find(a => a.startsWith('--max-len='))?.split('=')[1] || '60';
 
 if (!url || !url.includes('xiaoyuzhoufm.com/episode/')) {
   console.error('用法: node extract.mjs <小宇宙单集URL> [输出md路径] [--model medium] [--prompt "领域术语"]');
@@ -189,13 +191,74 @@ if (doDiarize) {
   }
 }
 
+// ---------- 4c. LLM 校对（默认开，--no-polish 跳过） ----------
+// 把分离后的正文写回临时文件，跑 polish.py（校对员模式，行数守恒），再读回
+const doPolish = !process.argv.includes('--no-polish');
+if (doPolish) {
+  const polishScript = join(homedir(), 'video-transcribe-skill', 'scripts', 'polish.py');
+  if (!existsSync(polishScript)) {
+    process.stderr.write('未找到 polish.py，跳过 LLM 校对\n');
+  } else {
+    process.stderr.write('LLM 校对中…\n');
+    const polishIn = join(tmpdir(), `xyz_polish_in_${Date.now()}.md`);
+    const polishOut = join(tmpdir(), `xyz_polish_out_${Date.now()}.md`);
+    writeFileSync(polishIn, `---\n\n${body}`, 'utf8');
+    try {
+      execFileSync('python', [
+        polishScript, polishIn, polishOut,
+        ...(termsArg ? ['--terms', termsArg] : []),
+      ], { stdio: 'pipe', timeout: Math.max(10 * 60 * 1000, durationSec * 1000 * 0.5) });
+      const polished = readFileSync(polishOut, 'utf8');
+      const pStart = polished.indexOf('[00:');
+      if (pStart >= 0) {
+        body = polished.slice(pStart);
+        process.stderr.write('LLM 校对完成\n');
+      }
+    } catch (e) {
+      process.stderr.write(`LLM 校对失败: ${e.message}，使用未校对结果\n`);
+    } finally {
+      rmSync(polishIn, { force: true });
+      rmSync(polishOut, { force: true });
+    }
+  }
+}
+
+// ---------- 4d. 长段拆分（默认开，--no-split 跳过） ----------
+const doSplit = !process.argv.includes('--no-split');
+if (doSplit) {
+  const splitScript = join(homedir(), 'video-transcribe-skill', 'scripts', 'split.py');
+  if (!existsSync(splitScript)) {
+    process.stderr.write('未找到 split.py，跳过拆分\n');
+  } else {
+    process.stderr.write('拆分长段中…\n');
+    const splitIn = join(tmpdir(), `xyz_split_in_${Date.now()}.md`);
+    const splitOut = join(tmpdir(), `xyz_split_out_${Date.now()}.md`);
+    writeFileSync(splitIn, `---\n\n${body}`, 'utf8');
+    try {
+      execFileSync('python', [splitScript, splitIn, splitOut, '--max-len', splitMaxLen],
+        { stdio: 'pipe', timeout: 60000 });
+      const split = readFileSync(splitOut, 'utf8');
+      const sStart = split.indexOf('[00:');
+      if (sStart >= 0) {
+        body = split.slice(sStart);
+        process.stderr.write('拆分完成\n');
+      }
+    } catch (e) {
+      process.stderr.write(`拆分失败: ${e.message}，使用未拆分结果\n`);
+    } finally {
+      rmSync(splitIn, { force: true });
+      rmSync(splitOut, { force: true });
+    }
+  }
+}
+
 const md = `# ${title}
 
 - 来源：${url}
 - 播客：${podcastTitle}
 - 时长：${durationStr}
 - 转写方式：faster-whisper ${modelArg} 模型本地转写（CPU int8）
-${diarizeNote ? diarizeNote + '\n' : ''}- 说明：以下内容为 AI 语音转写，保留时间戳，未对识别错误进行人工改写，含同音错字，引用前须人工校对。
+${diarizeNote ? diarizeNote + '\n' : ''}- 说明：以下内容为 AI 语音转写，经 LLM 校对（同音错字修正，不增删内容），保留时间戳与发言人，仍可能含少量错误，引用前须人工校对。
 
 ---
 
