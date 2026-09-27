@@ -46,10 +46,20 @@
 - 超时按音频时长动态计算（extract.mjs：转写 1.5x 实时上限、分离 0.5x、下限 10 分钟）——**勿改回固定值**，否则长音频必撞 spawnSync ETIMEDOUT
 - 长音频转写用后台进程 + 日志轮询（`start /b` + `findstr /c:"完成"`），不要阻塞等待，也不把转写正文读进上下文
 
+### 转写质量：简体 + 标点（transcribe.py 内置）
+
+whisper 中文转写有两个系统性问题，都在 transcribe.py 层修复，调用方无需关心：
+
+1. **繁简混杂**：whisper 对中文会输出繁体字（如「幹/結果/想辦法」）→ 输出前用 OpenCC t2s 统一转简体，默认启用（`--no-t2s` 可关）
+2. **无标点**：whisper 中文默认不带标点 → `initial_prompt` 以「以下是普通话的句子，使用简体中文，带标点符号。」开头引导模型输出标点（whisper 官方推荐技巧），实测标点覆盖率 ~96%
+
+若仍出现繁体或无标点输出，先检查这两处是否被改动。
+
 ## 前置条件
 
 - Node.js ≥ 21
 - Python 3 + faster-whisper + av（`pip install faster-whisper av`）
+- OpenCC 繁转简（`pip install opencc-python-reimplemented`，transcribe.py 默认启用 t2s）
 - `video-transcribe-skill` 的 `transcribe.py`（通过 `TRANSCRIBE_SCRIPT` 环境变量指定，或放同级目录，或放 `~/video-transcribe-skill/`）
 - 首次运行会下载 whisper 模型（设 `HF_ENDPOINT=https://hf-mirror.com` 用国内镜像）
 
