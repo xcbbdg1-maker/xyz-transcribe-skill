@@ -36,7 +36,8 @@ const modelArg = process.argv.find(a => a.startsWith('--model='))?.split('=')[1]
 const promptArg = process.argv.find(a => a.startsWith('--prompt='))?.split('=')[1] || '';
 const doDiarize = process.argv.includes('--diarize');
 const thresholdArg = process.argv.find(a => a.startsWith('--threshold='))?.split('=')[1] || '0.25';
-const termsArg = process.argv.find(a => a.startsWith('--terms='))?.split('=')[1] || '';
+const termsArg = process.argv.find(a => a.startsWith('--terms='))?.split('=')[1] ||
+  '四大,CPA,税务师,转移定价,甲方,乙方,猎头,草台班子,国际税,出海,国际税,EA,安永,普华永道,德勤,毕马威';
 const splitMaxLen = process.argv.find(a => a.startsWith('--max-len='))?.split('=')[1] || '60';
 
 if (!url || !url.includes('xiaoyuzhoufm.com/episode/')) {
@@ -253,6 +254,7 @@ if (doSplit) {
 
 // ---------- 4e. 排版：说话人分块（同一说话人连续行紧凑，换人时空行） ----------
 // 行尾加两个空格 = Markdown 硬换行（<br>），否则 GitHub 渲染时单换行会被合并成一段
+// 每个时间戳行之间再加一行空行（用户偏好：逐行间隔更易读）
 {
   const lines = body.split('\n');
   const out = [];
@@ -261,7 +263,7 @@ if (doSplit) {
     const m = line.match(/^\[\d{2}:\d{2}\]\s*说话人([A-Z]):/);
     if (m) {
       const spk = m[1];
-      if (prevSpk !== null && spk !== prevSpk) out.push('');
+      if (prevSpk !== null) out.push(''); // 每个时间戳行后都加空行（用户 2026-09-27 确认：换人分块太挤）
       prevSpk = spk;
       out.push(line.replace(/\s+$/, '') + '  ');
     } else {
